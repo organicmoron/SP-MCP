@@ -206,6 +206,32 @@ class SuperProductivityMCPServer:
                     }
                 ),
                 types.Tool(
+                    name="update_tag",
+                    description="Update an existing tag (title, color, icon)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "tag_id": {
+                                "type": "string",
+                                "description": "Tag ID to update"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "New tag title"
+                            },
+                            "color": {
+                                "type": "string",
+                                "description": "New tag color (hex code)"
+                            },
+                            "icon": {
+                                "type": "string",
+                                "description": "New tag icon (emoji or material icon name)"
+                            }
+                        },
+                        "required": ["tag_id"]
+                    }
+                ),
+                types.Tool(
                     name="show_notification",
                     description="Show a notification in Super Productivity",
                     inputSchema={
@@ -257,6 +283,8 @@ class SuperProductivityMCPServer:
                     result = await self.get_tags(arguments)
                 elif name == "create_tag":
                     result = await self.create_tag(arguments)
+                elif name == "update_tag":
+                    result = await self.update_tag(arguments)
                 elif name == "show_notification":
                     result = await self.show_notification(arguments)
                 elif name == "debug_directories":
@@ -413,9 +441,25 @@ class SuperProductivityMCPServer:
             "title": args.get("title", ""),
             "color": args.get("color", "#FF9800")
         }
-        
+
         return await self.send_command("addTag", data=tag_data)
-    
+
+    async def update_tag(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Update an existing tag"""
+        tag_id = args.get("tag_id")
+        if not tag_id:
+            return {"success": False, "error": "tag_id is required"}
+
+        updates = {}
+        if "title" in args:
+            updates["title"] = args["title"]
+        if "color" in args:
+            updates["color"] = args["color"]
+        if "icon" in args:
+            updates["icon"] = args["icon"]
+
+        return await self.send_command("updateTag", tagId=tag_id, data=updates)
+
     async def show_notification(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Show a notification"""
         return await self.send_command("showSnack", message=args.get("message", ""))
