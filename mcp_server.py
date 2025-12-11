@@ -89,7 +89,7 @@ class SuperProductivityMCPServer:
                 ),
                 types.Tool(
                     name="get_tasks",
-                    description="Get all tasks from Super Productivity",
+                    description="Get tasks from Super Productivity with optional filtering. Note: Filtering happens server-side after fetching all tasks (SP has no database indexes, so this is same O(n) complexity as filtering in SP itself).",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -97,6 +97,14 @@ class SuperProductivityMCPServer:
                                 "type": "boolean",
                                 "description": "Include completed tasks",
                                 "default": True
+                            },
+                            "tag_id": {
+                                "type": "string",
+                                "description": "Filter tasks by tag ID (only returns tasks with this tag)"
+                            },
+                            "project_id": {
+                                "type": "string",
+                                "description": "Filter tasks by project ID"
                             }
                         }
                     }
@@ -147,6 +155,30 @@ class SuperProductivityMCPServer:
                             }
                         },
                         "required": ["task_id"]
+                    }
+                ),
+                types.Tool(
+                    name="reorder_tasks",
+                    description="Reorder tasks within a project or subtasks within a parent task. Uses SP's native PluginAPI.reorderTasks() - task order is determined by array position. Perfect for LLM-assisted prioritization via binary comparisons.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Array of task IDs in the desired order (first = highest priority)"
+                            },
+                            "context_id": {
+                                "type": "string",
+                                "description": "The project ID (for reordering project tasks) or parent task ID (for reordering subtasks)"
+                            },
+                            "context_type": {
+                                "type": "string",
+                                "enum": ["project", "task"],
+                                "description": "Whether reordering tasks in a project or subtasks of a parent task"
+                            }
+                        },
+                        "required": ["task_ids", "context_id", "context_type"]
                     }
                 ),
                 types.Tool(
@@ -206,6 +238,32 @@ class SuperProductivityMCPServer:
                     }
                 ),
                 types.Tool(
+                    name="update_tag",
+                    description="Update an existing tag (title, color, icon)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "tag_id": {
+                                "type": "string",
+                                "description": "Tag ID to update"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "New tag title"
+                            },
+                            "color": {
+                                "type": "string",
+                                "description": "New tag color (hex code)"
+                            },
+                            "icon": {
+                                "type": "string",
+                                "description": "New tag icon (emoji or material icon name)"
+                            }
+                        },
+                        "required": ["tag_id"]
+                    }
+                ),
+                types.Tool(
                     name="show_notification",
                     description="Show a notification in Super Productivity",
                     inputSchema={
@@ -249,6 +307,8 @@ class SuperProductivityMCPServer:
                     result = await self.update_task(arguments)
                 elif name == "complete_and_archive_task":
                     result = await self.complete_and_archive_task(arguments)
+                elif name == "reorder_tasks":
+                    result = await self.reorder_tasks(arguments)
                 elif name == "get_projects":
                     result = await self.get_projects(arguments)
                 elif name == "create_project":
@@ -257,6 +317,8 @@ class SuperProductivityMCPServer:
                     result = await self.get_tags(arguments)
                 elif name == "create_tag":
                     result = await self.create_tag(arguments)
+                elif name == "update_tag":
+                    result = await self.update_tag(arguments)
                 elif name == "show_notification":
                     result = await self.show_notification(arguments)
                 elif name == "debug_directories":
@@ -350,8 +412,45 @@ class SuperProductivityMCPServer:
         return await self.send_command("addTask", data=task_data)
     
     async def get_tasks(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Get all tasks"""
-        return await self.send_command("getTasks")
+        """Get tasks with optional server-side filtering.
+
+        Note: SP uses IndexedDB without indexes on tagIds/projectId, so filtering
+        is always O(n) whether done in SP or here. We filter server-side to reduce
+        context usage when working with large task lists.
+
+        TODO: Migrate filtering to plugin-side when SP PluginAPI supports filtered queries.
+        See: https://github.com/organicmoron/SP-MCP/issues/5
+        """
+        result = await self.send_command("getTasks")
+
+        if not result.get("success"):
+            return result
+
+        tasks = result.get("data", result.get("result", []))
+        if not isinstance(tasks, list):
+            return result
+
+        # Filter by tag
+        tag_id = args.get("tag_id")
+        if tag_id:
+            tasks = [t for t in tasks if tag_id in t.get("tagIds", [])]
+
+        # Filter by project
+        project_id = args.get("project_id")
+        if project_id:
+            tasks = [t for t in tasks if t.get("projectId") == project_id]
+
+        # Filter out done tasks if requested
+        if not args.get("include_done", True):
+            tasks = [t for t in tasks if not t.get("isDone")]
+
+        # Update result with filtered tasks
+        if "data" in result:
+            result["data"] = tasks
+        else:
+            result["result"] = tasks
+
+        return result
     
     async def update_task(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Update a task"""
@@ -385,10 +484,36 @@ class SuperProductivityMCPServer:
         task_id = args.get("task_id")
         if not task_id:
             return {"success": False, "error": "task_id is required"}
-        
+
         # Mark task as done instead of deleting
         return await self.send_command("setTaskDone", taskId=task_id)
-    
+
+    async def reorder_tasks(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Reorder tasks using SP's native PluginAPI.reorderTasks().
+
+        This uses SP's proper API - task order is stored in the project's taskIds[]
+        array or parent task's subTaskIds[] array. Array position = priority.
+
+        Perfect for LLM-assisted prioritization via binary comparisons.
+        """
+        task_ids = args.get("task_ids")
+        context_id = args.get("context_id")
+        context_type = args.get("context_type")
+
+        if not task_ids:
+            return {"success": False, "error": "task_ids array is required"}
+        if not context_id:
+            return {"success": False, "error": "context_id is required"}
+        if context_type not in ["project", "task"]:
+            return {"success": False, "error": "context_type must be 'project' or 'task'"}
+
+        return await self.send_command(
+            "reorderTasks",
+            taskIds=task_ids,
+            contextId=context_id,
+            contextType=context_type
+        )
+
     async def get_projects(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Get all projects"""
         return await self.send_command("getAllProjects")
@@ -413,9 +538,25 @@ class SuperProductivityMCPServer:
             "title": args.get("title", ""),
             "color": args.get("color", "#FF9800")
         }
-        
+
         return await self.send_command("addTag", data=tag_data)
-    
+
+    async def update_tag(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Update an existing tag"""
+        tag_id = args.get("tag_id")
+        if not tag_id:
+            return {"success": False, "error": "tag_id is required"}
+
+        updates = {}
+        if "title" in args:
+            updates["title"] = args["title"]
+        if "color" in args:
+            updates["color"] = args["color"]
+        if "icon" in args:
+            updates["icon"] = args["icon"]
+
+        return await self.send_command("updateTag", tagId=tag_id, data=updates)
+
     async def show_notification(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Show a notification"""
         return await self.send_command("showSnack", message=args.get("message", ""))
