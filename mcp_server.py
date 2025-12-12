@@ -2,6 +2,7 @@
 # MCP Server for Super Productivity Integration
 
 import asyncio
+from datetime import date
 import json
 import logging
 import os
@@ -105,6 +106,21 @@ class SuperProductivityMCPServer:
                             "project_id": {
                                 "type": "string",
                                 "description": "Filter tasks by project ID"
+                            },
+                            "parents_only": {
+                                "type": "boolean",
+                                "description": "Only return parent tasks (exclude subtasks). Useful for triage.",
+                                "default": False
+                            },
+                            "overdue": {
+                                "type": "boolean",
+                                "description": "Only return tasks with dueDay before today. These are failed schedules needing re-triage.",
+                                "default": False
+                            },
+                            "unscheduled": {
+                                "type": "boolean",
+                                "description": "Only return tasks with no dueDay AND no dueWithTime set. These have never been scheduled.",
+                                "default": False
                             }
                         }
                     }
@@ -138,6 +154,11 @@ class SuperProductivityMCPServer:
                             "time_spent": {
                                 "type": "integer",
                                 "description": "Time spent in milliseconds"
+                            },
+                            "tag_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Replace all tags on the task with this list of tag IDs. Use add_tag_to_task/remove_tag_from_task for incremental changes."
                             }
                         },
                         "required": ["task_id"]
@@ -155,6 +176,42 @@ class SuperProductivityMCPServer:
                             }
                         },
                         "required": ["task_id"]
+                    }
+                ),
+                types.Tool(
+                    name="add_tag_to_task",
+                    description="Add a tag to a task. This appends to existing tags without removing them.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "description": "Task ID to add tag to"
+                            },
+                            "tag_id": {
+                                "type": "string",
+                                "description": "Tag ID to add"
+                            }
+                        },
+                        "required": ["task_id", "tag_id"]
+                    }
+                ),
+                types.Tool(
+                    name="remove_tag_from_task",
+                    description="Remove a tag from a task. Other tags remain unchanged.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "description": "Task ID to remove tag from"
+                            },
+                            "tag_id": {
+                                "type": "string",
+                                "description": "Tag ID to remove"
+                            }
+                        },
+                        "required": ["task_id", "tag_id"]
                     }
                 ),
                 types.Tool(
@@ -307,6 +364,10 @@ class SuperProductivityMCPServer:
                     result = await self.update_task(arguments)
                 elif name == "complete_and_archive_task":
                     result = await self.complete_and_archive_task(arguments)
+                elif name == "add_tag_to_task":
+                    result = await self.add_tag_to_task(arguments)
+                elif name == "remove_tag_from_task":
+                    result = await self.remove_tag_from_task(arguments)
                 elif name == "reorder_tasks":
                     result = await self.reorder_tasks(arguments)
                 elif name == "get_projects":
@@ -444,6 +505,20 @@ class SuperProductivityMCPServer:
         if not args.get("include_done", True):
             tasks = [t for t in tasks if not t.get("isDone")]
 
+        # Triage filters
+        # Parents only - exclude subtasks (tasks with parentId)
+        if args.get("parents_only", False):
+            tasks = [t for t in tasks if not t.get("parentId")]
+
+        # Overdue - tasks with dueDay before today (failed schedules)
+        if args.get("overdue", False):
+            today = date.today().isoformat()  # YYYY-MM-DD format
+            tasks = [t for t in tasks if t.get("dueDay") and t.get("dueDay") < today]
+
+        # Unscheduled - tasks with no dueDay AND no dueWithTime set
+        if args.get("unscheduled", False):
+            tasks = [t for t in tasks if not t.get("dueDay") and not t.get("dueWithTime")]
+
         # Update result with filtered tasks
         if "data" in result:
             result["data"] = tasks
@@ -476,7 +551,9 @@ class SuperProductivityMCPServer:
             updates["timeEstimate"] = args["time_estimate"]
         if "time_spent" in args:
             updates["timeSpent"] = args["time_spent"]
-        
+        if "tag_ids" in args:
+            updates["tagIds"] = args["tag_ids"]
+
         return await self.send_command("updateTask", taskId=task_id, data=updates)
     
     async def complete_and_archive_task(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -487,6 +564,30 @@ class SuperProductivityMCPServer:
 
         # Mark task as done instead of deleting
         return await self.send_command("setTaskDone", taskId=task_id)
+
+    async def add_tag_to_task(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Add a tag to a task (appends to existing tags)"""
+        task_id = args.get("task_id")
+        tag_id = args.get("tag_id")
+
+        if not task_id:
+            return {"success": False, "error": "task_id is required"}
+        if not tag_id:
+            return {"success": False, "error": "tag_id is required"}
+
+        return await self.send_command("addTagToTask", taskId=task_id, tagId=tag_id)
+
+    async def remove_tag_from_task(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove a tag from a task"""
+        task_id = args.get("task_id")
+        tag_id = args.get("tag_id")
+
+        if not task_id:
+            return {"success": False, "error": "task_id is required"}
+        if not tag_id:
+            return {"success": False, "error": "tag_id is required"}
+
+        return await self.send_command("removeTagFromTask", taskId=task_id, tagId=tag_id)
 
     async def reorder_tasks(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Reorder tasks using SP's native PluginAPI.reorderTasks().
