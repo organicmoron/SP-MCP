@@ -269,6 +269,50 @@ class SuperProductivityMCPServer:
                     }
                 ),
                 types.Tool(
+                    name="update_project",
+                    description="Update an existing project (title, description, color)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "project_id": {
+                                "type": "string",
+                                "description": "Project ID to update"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "New project title"
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "New project description"
+                            },
+                            "color": {
+                                "type": "string",
+                                "description": "New project color (hex code)"
+                            }
+                        },
+                        "required": ["project_id"]
+                    }
+                ),
+                types.Tool(
+                    name="move_task_to_project",
+                    description="Move a task to a different project",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "description": "Task ID to move"
+                            },
+                            "project_id": {
+                                "type": "string",
+                                "description": "Target project ID"
+                            }
+                        },
+                        "required": ["task_id", "project_id"]
+                    }
+                ),
+                types.Tool(
                     name="get_tags",
                     description="Get all tags from Super Productivity",
                     inputSchema={
@@ -374,6 +418,10 @@ class SuperProductivityMCPServer:
                     result = await self.get_projects(arguments)
                 elif name == "create_project":
                     result = await self.create_project(arguments)
+                elif name == "update_project":
+                    result = await self.update_project(arguments)
+                elif name == "move_task_to_project":
+                    result = await self.move_task_to_project(arguments)
                 elif name == "get_tags":
                     result = await self.get_tags(arguments)
                 elif name == "create_tag":
@@ -629,6 +677,37 @@ class SuperProductivityMCPServer:
         
         return await self.send_command("addProject", data=project_data)
     
+    async def update_project(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Update an existing project"""
+        project_id = args.get("project_id")
+        if not project_id:
+            return {"success": False, "error": "project_id is required"}
+
+        updates = {}
+        if "title" in args:
+            updates["title"] = args["title"]
+        if "description" in args:
+            updates["description"] = args["description"]
+        if "color" in args:
+            updates["color"] = args["color"]
+
+        if not updates:
+            return {"success": False, "error": "No updates provided"}
+
+        return await self.send_command("updateProject", projectId=project_id, data=updates)
+
+    async def move_task_to_project(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Move a task to a different project"""
+        task_id = args.get("task_id")
+        project_id = args.get("project_id")
+
+        if not task_id:
+            return {"success": False, "error": "task_id is required"}
+        if not project_id:
+            return {"success": False, "error": "project_id is required"}
+
+        return await self.send_command("moveTaskToProject", taskId=task_id, projectId=project_id)
+
     async def get_tags(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Get all tags"""
         return await self.send_command("getAllTags")
