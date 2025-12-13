@@ -159,6 +159,10 @@ class SuperProductivityMCPServer:
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "Replace all tags on the task with this list of tag IDs. Use add_tag_to_task/remove_tag_from_task for incremental changes."
+                            },
+                            "due_day": {
+                                "type": ["string", "null"],
+                                "description": "Due date in YYYY-MM-DD format, or null/empty string to clear the date and make task unscheduled."
                             }
                         },
                         "required": ["task_id"]
@@ -601,6 +605,14 @@ class SuperProductivityMCPServer:
             updates["timeSpent"] = args["time_spent"]
         if "tag_ids" in args:
             updates["tagIds"] = args["tag_ids"]
+
+        # Handle due_day - can set to a date string or clear with null/empty
+        if "due_day" in args:
+            due_day = args["due_day"]
+            if due_day is None or due_day == "" or due_day == "null":
+                updates["dueDay"] = None  # Clear the date
+            else:
+                updates["dueDay"] = due_day  # Set to provided date
 
         return await self.send_command("updateTask", taskId=task_id, data=updates)
     
