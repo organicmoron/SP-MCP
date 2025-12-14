@@ -395,6 +395,14 @@ class SuperProductivityMCPServer:
                         "type": "object",
                         "properties": {}
                     }
+                ),
+                types.Tool(
+                    name="get_current_task",
+                    description="Get the currently tracking task (active timer). Returns null if no task is being timed. O(1) lookup.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {}
+                    }
                 )
             ]
         
@@ -436,6 +444,8 @@ class SuperProductivityMCPServer:
                     result = await self.show_notification(arguments)
                 elif name == "debug_directories":
                     result = await self.debug_directories(arguments)
+                elif name == "get_current_task":
+                    result = await self.get_current_task()
                 else:
                     raise ValueError(f"Unknown tool: {name}")
                 
@@ -765,7 +775,12 @@ class SuperProductivityMCPServer:
                 "responses": self.response_dir.exists()
             }
         }
-    
+
+    async def get_current_task(self) -> Dict[str, Any]:
+        """Get the currently tracking task via loadSyncedData"""
+        result = await self.send_command("loadSyncedData", key="currentTask")
+        return {"success": True, "result": result.get("result")}
+
     async def run(self):
         """Run the MCP server"""
         logging.info("Starting Super Productivity MCP Server...")
