@@ -783,6 +783,8 @@ class MCPBridgePlugin {
 
     PluginAPI.registerHook('currentTaskChange', async (taskData) => {
       await this.sendEventToMCP('currentTaskChange', taskData);
+      // Store current task for O(1) retrieval
+      await PluginAPI.persistDataSynced('currentTask', taskData);
     });
 
   }
