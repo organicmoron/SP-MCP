@@ -26,9 +26,17 @@ class SuperProductivityMCPServer:
     def setup_directories(self):
         if os.name == 'nt':  # Windows
             data_dir = os.environ.get('APPDATA', os.path.expanduser('~/AppData/Roaming'))
-        else:  # Linux/Mac
+        elif sys.platform == 'darwin':  # Mac
+            # Support Mac Sandbox directories used by Mac App Store versions
+            # Fall back to standard Mac location if sandbox isn't present
+            mac_sandbox_dir = os.path.expanduser('~/Library/Containers/com.super-productivity.app/Data/.local/share')
+            if os.path.exists(os.path.expanduser('~/Library/Containers/com.super-productivity.app/Data')):
+                data_dir = mac_sandbox_dir
+            else:
+                data_dir = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
+        else:  # Linux
             data_dir = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
-        
+
         self.base_dir = Path(data_dir) / 'super-productivity-mcp'
         self.command_dir = self.base_dir / 'plugin_commands'
         self.response_dir = self.base_dir / 'plugin_responses'
