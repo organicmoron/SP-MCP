@@ -311,42 +311,53 @@ class SuperProductivityMCPServer:
         logging.warning(f"Timeout waiting for response to {action}")
         return {"success": False, "error": "Timeout waiting for response"}
     
-    def parse_task_syntax(self, title: str) -> tuple:
-        """Parse Super Productivity task syntax from title"""
-        title_clean = title
-        
-        # Extract tags from title (format: #tagname)
-        tag_matches = re.findall(r'#(\w+)', title_clean)
-        title_clean = re.sub(r'\s*#\w+', '', title_clean).strip()
-        
-        # Extract projects from title (format: +projectname)
-        project_matches = re.findall(r'\+(\w+)', title_clean)
-        title_clean = re.sub(r'\s*\+\w+', '', title_clean).strip()
-        
-        # Extract scheduling syntax (format: @fri 4pm, @tomorrow, @2024-01-15, etc.)
-        schedule_matches = re.findall(r'@(\w+(?:\s+\d+[ap]m)?)', title_clean, re.IGNORECASE)
-        title_clean = re.sub(r'\s*@\w+(?:\s+\d+[ap]m)?', '', title_clean, flags=re.IGNORECASE).strip()
-        
-        # Extract time estimate/spent syntax (format: 10m/3h, 2h, 30m, etc.)
-        time_matches = re.findall(r'(\d+[mh](?:/\d+[mh])?)', title_clean)
-        title_clean = re.sub(r'\s*\d+[mh](?:/\d+[mh])?', '', title_clean).strip()
-        
-        return title_clean, tag_matches, project_matches, schedule_matches, time_matches
-    
+    async def resolve_tag_ids(self, tag_names: List[str]) -> List[str]:
+        """Resolve tag names to IDs by querying Super Productivity.
+        Normalises names by lowercasing and stripping spaces/hyphens/underscores,
+        so #keeping-connections matches a tag titled 'keeping connections'."""
+        if not tag_names:
+            return []
+
+        tags_response = await self.send_command("getAllTags")
+        if not tags_response.get("success") or not tags_response.get("result"):
+            return []
+
+        def normalise(name: str) -> str:
+            return re.sub(r'[\s\-_]+', '', name.lower())
+
+        tag_lookup = {
+            normalise(tag.get("title", "")): tag.get("id")
+            for tag in tags_response["result"]
+        }
+
+        resolved = []
+        for name in tag_names:
+            tag_id = tag_lookup.get(normalise(name))
+            if tag_id:
+                resolved.append(tag_id)
+            else:
+                logging.warning(f"Tag not found: '{name}'")
+        return resolved
+
     async def create_task(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new task"""
         title = args.get("title", "")
-        
-        # Create the task data - Claude should have already converted natural language to SP syntax
+
+        # Extract #tags from title and strip them; leave @date syntax intact for SP plugin
+        tag_names = re.findall(r'#([\w-]+)', title)
+        title_clean = re.sub(r'\s*#[\w-]+', '', title).strip()
+
+        tag_ids = await self.resolve_tag_ids(tag_names) if tag_names else []
+
         task_data = {
-            "title": title,  # Use title as provided by Claude (should already have @syntax)
+            "title": title_clean,
             "notes": args.get("notes", ""),
             "timeEstimate": args.get("time_estimate", 0),
             "projectId": args.get("project_id"),
             "parentId": args.get("parent_id"),
-            "tagIds": []
+            "tagIds": tag_ids
         }
-        
+
         return await self.send_command("addTask", data=task_data)
     
     async def get_tasks(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -358,13 +369,20 @@ class SuperProductivityMCPServer:
         task_id = args.get("task_id")
         if not task_id:
             return {"success": False, "error": "task_id is required"}
-        
+
         updates = {}
-        
-        # Handle title - Claude should have already converted natural language to SP syntax
+
         if "title" in args:
-            updates["title"] = args["title"]
-        
+            title = args["title"]
+            # Extract #tags from title and strip them; leave @date syntax intact for SP plugin
+            tag_names = re.findall(r'#([\w-]+)', title)
+            title_clean = re.sub(r'\s*#[\w-]+', '', title).strip()
+            updates["title"] = title_clean
+            if tag_names:
+                tag_ids = await self.resolve_tag_ids(tag_names)
+                if tag_ids:
+                    updates["tagIds"] = tag_ids
+
         if "notes" in args:
             updates["notes"] = args["notes"]
         if "is_done" in args:
@@ -377,7 +395,7 @@ class SuperProductivityMCPServer:
             updates["timeEstimate"] = args["time_estimate"]
         if "time_spent" in args:
             updates["timeSpent"] = args["time_spent"]
-        
+
         return await self.send_command("updateTask", taskId=task_id, data=updates)
     
     async def complete_and_archive_task(self, args: Dict[str, Any]) -> Dict[str, Any]:
