@@ -64,7 +64,7 @@ Once that's done, restart claude (and Super Prod for good measure) and you shoul
 4. **Install the plugin:**
    - Open Super Productivity → Settings → Plugins
    - Click "Upload Plugin"
-   - Select `plugin.js`
+   - Select `plugin.zip`
 
 5. **Restart Claude Desktop**
 
@@ -89,6 +89,16 @@ Once that's done, restart claude (and Super Prod for good measure) and you shoul
 "Get all tags"
 ```
 
+### Habit Management
+```
+"Show me all my habits"
+"Create a habit called 'Drink water' with a daily goal of 8"
+"Mark the 'Drink water' habit as done for today"
+"Set the 'Meditation' habit value to 1 for 2026-04-25"
+"Rename the 'Exercise' habit to 'Morning workout'"
+```
+
+
 ## Dashboard
 
 Access the SP-MCP dashboard from the menu. The dashboard shows:
@@ -102,7 +112,7 @@ Access the SP-MCP dashboard from the menu. The dashboard shows:
 The plugin uses file-based communication through:
 - Windows: `%APPDATA%\super-productivity-mcp\`
 - Linux: `~/.local/share/super-productivity-mcp/`
-- macOS: `~/Library/Application Support/super-productivity-mcp/`
+- macOS: `~/Library/Containers/com.super-productivity.app/Data/.local/share/super-productivity-mcp/`
 
 Commands are exchanged through `plugin_commands/` and `plugin_responses/` directories.
 
@@ -115,4 +125,4 @@ Commands are exchanged through `plugin_commands/` and `plugin_responses/` direct
 ### Commands Not Working
 - Verify both plugin and MCP server are running
 - Check file permissions on communication directories
-- Check `mcp_server.log` in the data directory
+- Check `mcp_server.log` in the communication directory (see the file-based communication paths above; on macOS this is inside the container path, not `Library/Application Support`)

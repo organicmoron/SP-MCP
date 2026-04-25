@@ -17,6 +17,22 @@ from mcp.server.models import InitializationOptions
 
 
 class SuperProductivityMCPServer:
+    HABIT_FIELD_MAP = {
+        "title": "title",
+        "is_enabled": "isEnabled",
+        "is_hide_button": "isHideButton",
+        "icon": "icon",
+        "type": "type",
+        "is_track_streaks": "isTrackStreaks",
+        "streak_min_value": "streakMinValue",
+        "streak_mode": "streakMode",
+        "streak_week_days": "streakWeekDays",
+        "streak_weekly_frequency": "streakWeeklyFrequency",
+        "countdown_duration": "countdownDuration",
+    }
+    HABIT_TYPES = {"ClickCounter", "StopWatch", "RepeatedCountdownReminder"}
+    HABIT_STREAK_MODES = {"specific-days", "weekly-frequency"}
+
     def __init__(self):
         self.server = Server("super-productivity")
         self.setup_directories()
@@ -27,7 +43,18 @@ class SuperProductivityMCPServer:
         if os.name == 'nt':  # Windows
             data_dir = os.environ.get('APPDATA', os.path.expanduser('~/AppData/Roaming'))
         else:  # Linux/Mac
-            data_dir = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
+            # On macOS, Super Productivity runs in a sandbox so its plugin sees a different
+            # home directory. Use the container path if it exists so paths align.
+            sp_container_data = os.path.expanduser(
+                '~/Library/Containers/com.super-productivity.app/Data/.local/share'
+            )
+            sp_container_root = os.path.expanduser(
+                '~/Library/Containers/com.super-productivity.app'
+            )
+            if os.path.isdir(sp_container_root):
+                data_dir = sp_container_data
+            else:
+                data_dir = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
         
         self.base_dir = Path(data_dir) / 'super-productivity-mcp'
         self.command_dir = self.base_dir / 'plugin_commands'
@@ -206,6 +233,180 @@ class SuperProductivityMCPServer:
                     }
                 ),
                 types.Tool(
+                    name="get_habits",
+                    description="Get all habits from Super Productivity. Habits are represented by Super Productivity Simple Counters.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "include_disabled": {
+                                "type": "boolean",
+                                "description": "Include disabled habits",
+                                "default": True
+                            }
+                        }
+                    }
+                ),
+                types.Tool(
+                    name="create_habit",
+                    description="Create/register a new habit in Super Productivity.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Habit title"
+                            },
+                            "id": {
+                                "type": "string",
+                                "description": "Optional habit ID. Use only letters, numbers, hyphens, and underscores. If omitted, one is generated from the title."
+                            },
+                            "type": {
+                                "type": "string",
+                                "enum": ["ClickCounter", "StopWatch", "RepeatedCountdownReminder"],
+                                "description": "Habit counter type",
+                                "default": "ClickCounter"
+                            },
+                            "icon": {
+                                "type": "string",
+                                "description": "Optional Material icon name, e.g. fitness_center"
+                            },
+                            "is_enabled": {
+                                "type": "boolean",
+                                "description": "Whether the habit is enabled",
+                                "default": True
+                            },
+                            "is_hide_button": {
+                                "type": "boolean",
+                                "description": "Hide the habit from quick counter buttons"
+                            },
+                            "is_track_streaks": {
+                                "type": "boolean",
+                                "description": "Whether streaks are tracked for this habit",
+                                "default": True
+                            },
+                            "streak_min_value": {
+                                "type": "number",
+                                "description": "Minimum daily value required to count toward the streak"
+                            },
+                            "streak_mode": {
+                                "type": "string",
+                                "enum": ["specific-days", "weekly-frequency"],
+                                "description": "Streak tracking mode",
+                                "default": "specific-days"
+                            },
+                            "streak_week_days": {
+                                "type": "object",
+                                "description": "Specific active weekdays as keys 0-6 where 0 is Sunday, e.g. {\"1\": true, \"2\": true, \"3\": true, \"4\": true, \"5\": true}",
+                                "additionalProperties": {"type": "boolean"}
+                            },
+                            "streak_weekly_frequency": {
+                                "type": "integer",
+                                "description": "Required completions per week for weekly-frequency streak mode"
+                            },
+                            "countdown_duration": {
+                                "type": "integer",
+                                "description": "Countdown duration in milliseconds for RepeatedCountdownReminder habits"
+                            },
+                            "initial_value": {
+                                "type": "number",
+                                "description": "Initial counter value for today",
+                                "default": 0
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                ),
+                types.Tool(
+                    name="update_habit",
+                    description="Edit an existing Super Productivity habit.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Habit ID"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "New habit title"
+                            },
+                            "type": {
+                                "type": "string",
+                                "enum": ["ClickCounter", "StopWatch", "RepeatedCountdownReminder"],
+                                "description": "Habit counter type"
+                            },
+                            "icon": {
+                                "type": "string",
+                                "description": "Material icon name"
+                            },
+                            "is_enabled": {
+                                "type": "boolean",
+                                "description": "Whether the habit is enabled"
+                            },
+                            "is_hide_button": {
+                                "type": "boolean",
+                                "description": "Hide the habit from quick counter buttons"
+                            },
+                            "is_track_streaks": {
+                                "type": "boolean",
+                                "description": "Whether streaks are tracked for this habit"
+                            },
+                            "streak_min_value": {
+                                "type": "number",
+                                "description": "Minimum daily value required to count toward the streak"
+                            },
+                            "streak_mode": {
+                                "type": "string",
+                                "enum": ["specific-days", "weekly-frequency"],
+                                "description": "Streak tracking mode"
+                            },
+                            "streak_week_days": {
+                                "type": "object",
+                                "description": "Specific active weekdays as keys 0-6 where 0 is Sunday",
+                                "additionalProperties": {"type": "boolean"}
+                            },
+                            "streak_weekly_frequency": {
+                                "type": "integer",
+                                "description": "Required completions per week for weekly-frequency streak mode"
+                            },
+                            "countdown_duration": {
+                                "type": "integer",
+                                "description": "Countdown duration in milliseconds for RepeatedCountdownReminder habits"
+                            }
+                        },
+                        "required": ["id"]
+                    }
+                ),
+                types.Tool(
+                    name="log_habit",
+                    description="Register a habit value for today or a specific YYYY-MM-DD date.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Habit ID"
+                            },
+                            "operation": {
+                                "type": "string",
+                                "enum": ["set", "increment", "decrement"],
+                                "description": "How to apply the value",
+                                "default": "set"
+                            },
+                            "value": {
+                                "type": "number",
+                                "description": "Value to set, increment by, or decrement by",
+                                "default": 1
+                            },
+                            "date": {
+                                "type": "string",
+                                "description": "Optional date in YYYY-MM-DD format. If omitted, today is used."
+                            }
+                        },
+                        "required": ["id"]
+                    }
+                ),
+                types.Tool(
                     name="show_notification",
                     description="Show a notification in Super Productivity",
                     inputSchema={
@@ -257,6 +458,14 @@ class SuperProductivityMCPServer:
                     result = await self.get_tags(arguments)
                 elif name == "create_tag":
                     result = await self.create_tag(arguments)
+                elif name == "get_habits":
+                    result = await self.get_habits(arguments)
+                elif name == "create_habit":
+                    result = await self.create_habit(arguments)
+                elif name == "update_habit":
+                    result = await self.update_habit(arguments)
+                elif name == "log_habit":
+                    result = await self.log_habit(arguments)
                 elif name == "show_notification":
                     result = await self.show_notification(arguments)
                 elif name == "debug_directories":
@@ -415,6 +624,87 @@ class SuperProductivityMCPServer:
         }
         
         return await self.send_command("addTag", data=tag_data)
+
+    def build_habit_data(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Build SimpleCounter habit data from MCP snake_case arguments."""
+        habit_data = {}
+        for arg_name, habit_name in self.HABIT_FIELD_MAP.items():
+            if arg_name in args and args[arg_name] is not None:
+                habit_data[habit_name] = args[arg_name]
+
+        habit_type = habit_data.get("type")
+        if habit_type and habit_type not in self.HABIT_TYPES:
+            return {"error": f"type must be one of {sorted(self.HABIT_TYPES)}"}
+
+        streak_mode = habit_data.get("streakMode")
+        if streak_mode and streak_mode not in self.HABIT_STREAK_MODES:
+            return {"error": f"streak_mode must be one of {sorted(self.HABIT_STREAK_MODES)}"}
+
+        return habit_data
+
+    async def get_habits(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Get all habits"""
+        return await self.send_command(
+            "getHabits",
+            includeDisabled=args.get("include_disabled", True)
+        )
+
+    async def create_habit(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Create/register a new habit"""
+        title = args.get("title", "")
+        if not title:
+            return {"success": False, "error": "title is required"}
+
+        habit_data = self.build_habit_data(args)
+        if "error" in habit_data:
+            return {"success": False, "error": habit_data["error"]}
+
+        habit_data.setdefault("title", title)
+        habit_data.setdefault("type", "ClickCounter")
+        habit_data.setdefault("isEnabled", True)
+
+        return await self.send_command(
+            "createHabit",
+            habitId=args.get("id"),
+            data=habit_data,
+            initialValue=args.get("initial_value", 0)
+        )
+
+    async def update_habit(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Edit an existing habit"""
+        habit_id = args.get("id")
+        if not habit_id:
+            return {"success": False, "error": "id is required"}
+
+        habit_data = self.build_habit_data(args)
+        if "error" in habit_data:
+            return {"success": False, "error": habit_data["error"]}
+        if not habit_data:
+            return {"success": False, "error": "No habit fields provided to update"}
+
+        return await self.send_command("updateHabit", habitId=habit_id, data=habit_data)
+
+    async def log_habit(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Register a value for a habit"""
+        habit_id = args.get("id")
+        if not habit_id:
+            return {"success": False, "error": "id is required"}
+
+        operation = args.get("operation", "set")
+        if operation not in {"set", "increment", "decrement"}:
+            return {"success": False, "error": "operation must be set, increment, or decrement"}
+
+        habit_date = args.get("date")
+        if habit_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", habit_date):
+            return {"success": False, "error": "date must use YYYY-MM-DD format"}
+
+        return await self.send_command(
+            "logHabit",
+            habitId=habit_id,
+            operation=operation,
+            value=args.get("value", 1),
+            date=habit_date
+        )
     
     async def show_notification(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Show a notification"""

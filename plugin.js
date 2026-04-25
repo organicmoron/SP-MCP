@@ -435,7 +435,267 @@ class MCPBridgePlugin {
       this.stats.errors++;
     }
   }
-  
+
+
+  ensureHabitApi(methods) {
+    const missing = methods.filter(method => typeof PluginAPI[method] !== 'function');
+    if (missing.length > 0) {
+      throw new Error(`Habit support requires a Super Productivity version with Simple Counter plugin API methods. Missing: ${missing.join(', ')}`);
+    }
+  }
+
+  normalizeNonNegativeNumber(value, fieldName) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue) || numericValue < 0) {
+      throw new Error(`${fieldName} must be a non-negative number`);
+    }
+    return numericValue;
+  }
+
+  validateHabitDate(date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new Error('date must use YYYY-MM-DD format');
+    }
+    const parsed = new Date(`${date}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error('date must be a valid YYYY-MM-DD date');
+    }
+  }
+
+  normalizeStreakWeekDays(value) {
+    const normalized = {};
+
+    if (Array.isArray(value)) {
+      for (let day = 0; day <= 6; day++) {
+        normalized[day] = value.includes(day) || value.includes(String(day));
+      }
+      return normalized;
+    }
+
+    if (value && typeof value === 'object') {
+      for (const [day, isEnabled] of Object.entries(value)) {
+        const dayNumber = Number(day);
+        if (!Number.isInteger(dayNumber) || dayNumber < 0 || dayNumber > 6) {
+          throw new Error('streakWeekDays keys must be integers from 0 to 6');
+        }
+        normalized[dayNumber] = Boolean(isEnabled);
+      }
+      return normalized;
+    }
+
+    throw new Error('streakWeekDays must be an object or array');
+  }
+
+  normalizeCountOnDay(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('countOnDay must be an object keyed by YYYY-MM-DD date');
+    }
+
+    const normalized = {};
+    for (const [date, count] of Object.entries(value)) {
+      this.validateHabitDate(date);
+      normalized[date] = this.normalizeNonNegativeNumber(count, `countOnDay.${date}`);
+    }
+    return normalized;
+  }
+
+  normalizeHabitData(data = {}) {
+    const allowedTypes = ['ClickCounter', 'StopWatch', 'RepeatedCountdownReminder'];
+    const allowedStreakModes = ['specific-days', 'weekly-frequency'];
+    const normalized = {};
+
+    const passthroughFields = [
+      'title',
+      'isEnabled',
+      'isHideButton',
+      'icon',
+      'isTrackStreaks',
+      'isOn',
+    ];
+
+    for (const field of passthroughFields) {
+      if (data[field] !== undefined) {
+        normalized[field] = data[field];
+      }
+    }
+
+    if (data.type !== undefined) {
+      if (!allowedTypes.includes(data.type)) {
+        throw new Error(`type must be one of: ${allowedTypes.join(', ')}`);
+      }
+      normalized.type = data.type;
+    }
+
+    if (data.streakMode !== undefined) {
+      if (!allowedStreakModes.includes(data.streakMode)) {
+        throw new Error(`streakMode must be one of: ${allowedStreakModes.join(', ')}`);
+      }
+      normalized.streakMode = data.streakMode;
+    }
+
+    if (data.streakMinValue !== undefined) {
+      normalized.streakMinValue = this.normalizeNonNegativeNumber(data.streakMinValue, 'streakMinValue');
+    }
+
+    if (data.streakWeeklyFrequency !== undefined) {
+      const frequency = this.normalizeNonNegativeNumber(data.streakWeeklyFrequency, 'streakWeeklyFrequency');
+      if (!Number.isInteger(frequency) || frequency < 1 || frequency > 7) {
+        throw new Error('streakWeeklyFrequency must be an integer from 1 to 7');
+      }
+      normalized.streakWeeklyFrequency = frequency;
+    }
+
+    if (data.countdownDuration !== undefined) {
+      normalized.countdownDuration = this.normalizeNonNegativeNumber(data.countdownDuration, 'countdownDuration');
+    }
+
+    if (data.streakWeekDays !== undefined) {
+      normalized.streakWeekDays = this.normalizeStreakWeekDays(data.streakWeekDays);
+    }
+
+    if (data.countOnDay !== undefined) {
+      normalized.countOnDay = this.normalizeCountOnDay(data.countOnDay);
+    }
+
+    return normalized;
+  }
+
+  generateHabitId(title, existingCounters) {
+    const existingIds = new Set(existingCounters.map(counter => counter.id));
+    const baseId = String(title || 'habit')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'habit';
+
+    let candidate = baseId;
+    if (!existingIds.has(candidate)) {
+      return candidate;
+    }
+
+    let suffix = Date.now().toString(36);
+    candidate = `${baseId}-${suffix}`;
+    while (existingIds.has(candidate)) {
+      suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`;
+      candidate = `${baseId}-${suffix}`;
+    }
+    return candidate;
+  }
+
+  async getHabits(includeDisabled = true) {
+    if (typeof PluginAPI.getAllSimpleCounters === 'function') {
+      const counters = await PluginAPI.getAllSimpleCounters();
+      return includeDisabled ? counters : counters.filter(counter => counter.isEnabled);
+    }
+
+    if (typeof PluginAPI.getAllCounters === 'function') {
+      return {
+        limited: true,
+        message: 'This Super Productivity version only exposes today values, not editable habit definitions.',
+        counters: await PluginAPI.getAllCounters()
+      };
+    }
+
+    this.ensureHabitApi(['getAllSimpleCounters']);
+  }
+
+  async createHabit(habitId, data = {}, initialValue = 0) {
+    this.ensureHabitApi(['getAllSimpleCounters', 'getSimpleCounter', 'setCounter', 'updateSimpleCounter']);
+
+    if (!data.title || typeof data.title !== 'string' || !data.title.trim()) {
+      throw new Error('Habit title is required');
+    }
+
+    const existingCounters = await PluginAPI.getAllSimpleCounters();
+    const id = habitId || data.id || this.generateHabitId(data.title, existingCounters);
+
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+      throw new Error('Habit ID must contain only letters, numbers, hyphens, and underscores');
+    }
+    if (existingCounters.some(counter => counter.id === id)) {
+      throw new Error(`Habit ${id} already exists`);
+    }
+
+    const normalizedData = this.normalizeHabitData({
+      ...data,
+      title: data.title.trim(),
+      type: data.type || 'ClickCounter',
+      isEnabled: data.isEnabled !== undefined ? data.isEnabled : true,
+    });
+
+    await PluginAPI.setCounter(id, this.normalizeNonNegativeNumber(initialValue, 'initialValue'));
+    await PluginAPI.updateSimpleCounter(id, normalizedData);
+
+    return await PluginAPI.getSimpleCounter(id) || { id, ...normalizedData };
+  }
+
+  async updateHabit(habitId, data = {}) {
+    this.ensureHabitApi(['getSimpleCounter', 'updateSimpleCounter']);
+
+    const existingCounter = await PluginAPI.getSimpleCounter(habitId);
+    if (!existingCounter) {
+      throw new Error(`Habit ${habitId} not found`);
+    }
+
+    const normalizedData = this.normalizeHabitData(data);
+    if (Object.keys(normalizedData).length === 0) {
+      throw new Error('No habit fields provided to update');
+    }
+
+    await PluginAPI.updateSimpleCounter(habitId, normalizedData);
+    return await PluginAPI.getSimpleCounter(habitId) || { id: habitId, ...normalizedData };
+  }
+
+  async logHabit(habitId, operation = 'set', value = 1, date = null) {
+    this.ensureHabitApi(['getSimpleCounter']);
+
+    const counter = await PluginAPI.getSimpleCounter(habitId);
+    if (!counter) {
+      throw new Error(`Habit ${habitId} not found`);
+    }
+
+    const numericValue = this.normalizeNonNegativeNumber(value, 'value');
+
+    if (date) {
+      this.validateHabitDate(date);
+      this.ensureHabitApi(['setSimpleCounterDate']);
+
+      const currentValue = counter.countOnDay?.[date] || 0;
+      let newValue;
+      if (operation === 'set') {
+        newValue = numericValue;
+      } else if (operation === 'increment') {
+        newValue = currentValue + numericValue;
+      } else if (operation === 'decrement') {
+        newValue = Math.max(0, currentValue - numericValue);
+      } else {
+        throw new Error('operation must be set, increment, or decrement');
+      }
+
+      await PluginAPI.setSimpleCounterDate(habitId, date, newValue);
+      return await PluginAPI.getSimpleCounter(habitId) || { id: habitId, date, value: newValue };
+    }
+
+    if (operation === 'set') {
+      if (typeof PluginAPI.setSimpleCounterToday === 'function') {
+        await PluginAPI.setSimpleCounterToday(habitId, numericValue);
+      } else {
+        this.ensureHabitApi(['setCounter']);
+        await PluginAPI.setCounter(habitId, numericValue);
+      }
+    } else if (operation === 'increment') {
+      this.ensureHabitApi(['incrementCounter']);
+      await PluginAPI.incrementCounter(habitId, numericValue);
+    } else if (operation === 'decrement') {
+      this.ensureHabitApi(['decrementCounter']);
+      await PluginAPI.decrementCounter(habitId, numericValue);
+    } else {
+      throw new Error('operation must be set, increment, or decrement');
+    }
+
+    return await PluginAPI.getSimpleCounter(habitId) || { id: habitId };
+  }
 
   async executeCommand(commandInfo) {
     const { command, filename, path: commandPath } = commandInfo;
@@ -597,6 +857,32 @@ class MCPBridgePlugin {
           
         case 'deleteTag':
           result = { error: 'Tag deletion not supported via Plugin API.' };
+          break;
+
+        // Habit operations (Super Productivity Simple Counters)
+        case 'getHabits':
+          result = await this.getHabits(command.includeDisabled !== false);
+          break;
+
+        case 'createHabit':
+          result = await this.createHabit(
+            command.habitId,
+            command.data,
+            command.initialValue || 0
+          );
+          break;
+
+        case 'updateHabit':
+          result = await this.updateHabit(command.habitId, command.data);
+          break;
+
+        case 'logHabit':
+          result = await this.logHabit(
+            command.habitId,
+            command.operation || 'set',
+            command.value === undefined ? 1 : command.value,
+            command.date || null
+          );
           break;
 
         // UI operations
