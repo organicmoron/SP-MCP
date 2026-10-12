@@ -218,8 +218,17 @@ class SuperProductivityMCPServer:
                             "type": {
                                 "type": "string",
                                 "enum": ["success", "info", "warning", "error"],
-                                "description": "Notification type",
+                                "description": "Notification type (in-app snack only)",
                                 "default": "info"
+                            },
+                            "system": {
+                                "type": "boolean",
+                                "description": "If true, show a desktop/system notification (stays visible longer) instead of the short in-app snack",
+                                "default": False
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Title for the system notification (only used when system=true)"
                             }
                         },
                         "required": ["message"]
@@ -418,7 +427,17 @@ class SuperProductivityMCPServer:
     
     async def show_notification(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Show a notification"""
-        return await self.send_command("showSnack", message=args.get("message", ""))
+        if args.get("system"):
+            return await self.send_command(
+                "notify",
+                message=args.get("message", ""),
+                title=args.get("title") or "Super Productivity",
+            )
+        return await self.send_command(
+            "showSnack",
+            message=args.get("message", ""),
+            type=args.get("type", "info"),
+        )
     
     async def debug_directories(self, args: Dict[str, Any]) -> Dict[str, Any]:
         return {
