@@ -124,8 +124,22 @@ class MCPBridgePlugin {
     await this.log('MCP Bridge Plugin initializing...');
     
     try {
-      // Find the MCP server and set up communication directories
-      await this.setupMCPCommunication();
+      // Find the MCP server and set up communication directories.
+      // On app startup the Node bridge / permission may not be ready yet,
+      // so retry for a while instead of giving up on the first attempt.
+      const maxAttempts = 40;      // ~2 minutes
+      const retryDelayMs = 3000;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await this.setupMCPCommunication();
+          if (attempt > 1) await this.log(`Setup succeeded on attempt ${attempt}`);
+          break;
+        } catch (e) {
+          if (attempt >= maxAttempts) throw e;
+          await this.log(`Setup attempt ${attempt} failed (${e.message}); retrying in ${retryDelayMs / 1000}s`);
+          await new Promise(r => setTimeout(r, retryDelayMs));
+        }
+      }
       
       // Set config file path and load configuration (non-blocking)
       this.config.configFile = this.mcpServerPath + '/mcp_bridge_config.json';
@@ -227,7 +241,7 @@ class MCPBridgePlugin {
         this.config.mcpResponseDir = scriptResult.responseDir;
         return;
       } else {
-        await this.log('AppData setup failed, trying fallback method');
+        await this.log(`AppData setup failed, trying fallback method. Result: ${JSON.stringify(result)}`);
       }
     } catch (e) {
       await this.log(`AppData setup failed: ${e.message}`);
@@ -257,6 +271,9 @@ class MCPBridgePlugin {
         timeout: 5000
       });
       
+      if (!(fallbackResult && fallbackResult.success && fallbackResult.result)) {
+        await this.log(`Fallback setup failed. Result: ${JSON.stringify(fallbackResult)}`);
+      }
       if (fallbackResult && fallbackResult.success && fallbackResult.result) {
         this.mcpServerPath = fallbackResult.result.mcpServerPath;
         this.config.mcpCommandDir = fallbackResult.result.commandDir;
@@ -600,26 +617,34 @@ class MCPBridgePlugin {
           break;
 
         // UI operations
-        case 'showSnack':
+        case 'showSnack': {
+          // SnackCfg expects { msg, type } with an upper-case type
+          const snackTypes = { success: 'SUCCESS', info: 'INFO', warning: 'WARNING', error: 'ERROR' };
+          const snackType = snackTypes[String(command.type || 'info').toLowerCase()] || 'INFO';
           try {
-            result = await PluginAPI.showSnack({
-              message: command.message,
-              type: 'SUCCESS'
+            PluginAPI.showSnack({
+              msg: String(command.message ?? ''),
+              type: snackType
             });
+            result = { success: true };
           } catch (e) {
-            // Fallback - just log the message
-            console.log('Snack message:', command.message);
-            result = { success: true, fallback: true };
+            console.log('Snack message:', command.message, e);
+            result = { success: false, error: `showSnack failed: ${e.message}` };
           }
           break;
+        }
           
         case 'notify':
+          // NotifyCfg expects { title, body }
           try {
-            result = await PluginAPI.notify(command.message);
+            await PluginAPI.notify({
+              title: String(command.title || 'Super Productivity'),
+              body: String(command.message ?? '')
+            });
+            result = { success: true };
           } catch (e) {
-            // Fallback - just log the message
-            console.log('Notification:', command.message);
-            result = { success: true, fallback: true };
+            console.log('Notification:', command.message, e);
+            result = { success: false, error: `notify failed: ${e.message}` };
           }
           break;
           
